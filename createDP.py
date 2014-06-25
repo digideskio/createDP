@@ -95,10 +95,10 @@ import xml.etree.cElementTree as ET
 
 
 ### Fill these in ###
-jss_url = "https://nick.local:8443/"
-jss_username = "admin"
-jss_password = "jamf1234"
-jds_dns_address = "nick.local" #<-This must be reachable by clients
+jss_url = ""
+jss_username = ""
+jss_password = ""
+jds_dns_address = "" #<-This must be reachable by clients
 
 ### If left blank, these will be randomized...
 readUserPasswd = ""
@@ -112,6 +112,7 @@ def main():
     Utils.verifyVariable("jss_url", jss_url)
     Utils.verifyVariable("jss_username", jss_username)
     Utils.verifyVariable("jss_password", jss_password)
+    Utils.verifyVariable("jds_dns_address", jds_dns_address)
     createAFPUsers()
     createAFPShare()
     linkExistingPackages()
