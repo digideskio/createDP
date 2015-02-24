@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 ####################################################################################################
 #
-# Copyright (c) 2014, JAMF Software, LLC
+# Copyright (c) 2015, JAMF Software, LLC
 # All rights reserved.
 #
 #
@@ -84,11 +84,14 @@
 ####################################################################################################
 
 import sys
+import os.path
 import random
 import string
 import subprocess
 import plistlib
 import httplib
+import socket
+import ssl
 import urllib2
 import base64
 import xml.etree.cElementTree as ET
@@ -103,64 +106,63 @@ jds_dns_address = "" #<-This must be reachable by clients
 ### If left blank, these will be randomized...
 readUserPasswd = ""
 writeUserPasswd = ""
-userCheck = ""
 
 
 
 ### DO NOT EDIT BELOW THIS LINE ###
+userCheck = ""
 def main():
     Utils.verifyVariable("jss_url", jss_url)
     Utils.verifyVariable("jss_username", jss_username)
     Utils.verifyVariable("jss_password", jss_password)
     Utils.verifyVariable("jds_dns_address", jds_dns_address)
-    createAFPUsers()
-    createAFPShare()
+    createAFPShare(getUID("afpReadUsername"), getUID("afpWriteUsername"))
     linkExistingPackages()
     createPackageMonitor()
     if userCheck == "":
-        createDP()
+    	createDP()
+    else:
+	print "WARNING: \"afpReadUsername\" and \"afpWriteUsername\" Users already exist.  Please delete these users and run the script again to ensure that the DP is created properly in the JSS, or manually create the distribution point in your JSS with the proper custom credentials."
 
-def createAFPUsers():
+def getUID(username):
     global readUserPasswd
-    global writeUserPasswd
-    global userCheck
-    print "Creating AFP Users..."
-    
-    userCheck = Utils.shell_command("/usr/bin/dscl . read /Users/afpReadUsername 2> /dev/null")
-    if userCheck != "":
-        print "\tAFP users already exist."
-        return
+    global writeUserPasswd  
+    global userCheck  
+    userCheck = Utils.shell_command("/usr/bin/dscl . read /Users/" + username + " 2> /dev/null")
+    if userCheck == "":
+        print "Creating user: " + username + "..."
+        userIDs = Utils.shell_command("/usr/bin/dscl . list /Users UniqueID | awk '{print $2}'").splitlines()
+        userIDs.sort(key=int)
+        print "\tLast user ID: " + userIDs[-1]
+        userID = int(userIDs[-1]) + 1
+        userPasswd = Utils.random_string()
+        if username == "afpReadUsername":
+            if readUserPasswd == "":
+                #Assign random password
+                readUserPasswd = userPasswd
+            else:
+                #Use provided password
+                userPasswd = readUserPasswd
+        else:
+            if writeUserPasswd == "":
+                #Assign random password
+                writeUserPasswd = userPasswd
+            else:
+            	#Use provided password
+            	userPasswd = writeUserPasswd
 
-    userIDs = Utils.shell_command("/usr/bin/dscl . list /Users UniqueID | awk '{print $2}'").splitlines()
-    userIDs.sort(key=int)
-    print "\tLast user ID: " + userIDs[-1]
-    readUserID = int(userIDs[-1]) + 1
-    if readUserPasswd == "":
-        readUserPasswd = Utils.random_string()
-    writeUserID = int(userIDs[-1]) + 2
-    if writeUserPasswd == "":
-        writeUserPasswd = Utils.random_string()
-
-    print "\tCreating AFP Read User with ID: " + str(readUserID) + "..."
-    print "\tPassword: " + readUserPasswd
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpReadUsername")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpReadUsername UniqueID " + str(readUserID))
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpReadUsername PrimaryGroupID 20")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpReadUsername RealName afpReadUsername")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpReadUsername UserShell /bin/bash")
-    Utils.shell_command("/usr/bin/dscl . passwd /Users/afpReadUsername " + readUserPasswd)
-    
-    print "\tCreating AFP Write User with ID: " + str(writeUserID) + "..."
-    #print "\tPassword: " + writeUserPasswd
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpWriteUsername")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpWriteUsername UniqueID " + str(writeUserID))
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpWriteUsername PrimaryGroupID 20")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpWriteUsername RealName afpWriteUsername")
-    Utils.shell_command("/usr/bin/dscl . create /Users/afpWriteUsername UserShell /bin/bash")
-    Utils.shell_command("/usr/bin/dscl . passwd /Users/afpWriteUsername " + writeUserPasswd)
+        print "\tCreating user " + username + " with ID: " + str(userID) + "..."
+        Utils.shell_command("/usr/bin/dscl . create /Users/" + username)
+        Utils.shell_command("/usr/bin/dscl . create /Users/" + username + " UniqueID " + str(userID))
+        Utils.shell_command("/usr/bin/dscl . create /Users/" + username + " PrimaryGroupID 20")
+        Utils.shell_command("/usr/bin/dscl . create /Users/" + username + " RealName " + username)
+        Utils.shell_command("/usr/bin/dscl . create /Users/" + username + " UserShell /bin/bash")
+        Utils.shell_command("/usr/bin/dscl . passwd /Users/" + username + " " + userPasswd)
+        
+    return Utils.shell_command("/usr/bin/dscl . read /Users/" + username + " GeneratedUID | awk '{print $2}'")
 
 
-def createAFPShare():
+def createAFPShare(readUserGeneratedUID, writeUserGeneratedUID):
     print "Creating AFP Share..."
     Utils.shell_command("/bin/mkdir -p /Shared\ Items/CasperShare/Packages")
     Utils.shell_command("/usr/sbin/sharing -a /Shared\ Items/CasperShare")
@@ -169,11 +171,26 @@ def createAFPShare():
     Utils.shell_command("/bin/chmod -R +a \"afpReadUsername allow list,search,readattr,readextattr,readsecurity,file_inherit,directory_inherit\" /Shared\ Items/CasperShare")
     Utils.shell_command("/bin/chmod -R +a \"afpWriteUsername allow list,add_file,search,add_subdirectory,delete_child,readattr,writeattr,readextattr,writeextattr,readsecurity,file_inherit,directory_inherit\" /Shared\ Items/CasperShare")
     Utils.shell_command("/usr/sbin/sharing -s 100")
-    Utils.shell_command("/usr/bin/dscl . append /Groups/com.apple.access_afp GroupMembership afpReadUsername")
-    Utils.shell_command("/usr/bin/dscl . append /Groups/com.apple.access_afp GroupMembership afpWriteUsername")
+    Utils.shell_command("/usr/bin/dscl . append /Groups/com.apple.access_afp GroupMembership afpReadUsername 2> /dev/null")
+    Utils.shell_command("/usr/bin/dscl . append /Groups/com.apple.access_afp GroupMembership afpWriteUsername 2> /dev/null")
+    
+    print "\tDetermining Sharepoint Structure..."
+    sharepointGroups = Utils.shell_command("/usr/bin/dscl . list /Groups | grep sharepoint 2> /dev/null").splitlines()
+    for group in sharepointGroups:
+        shareName = Utils.shell_command("/usr/bin/dscl . read /Groups/" + group + " RealName | awk '{print $2}'")
+        if shareName == "CasperShare":
+            print "\t\tGroup for CasperShare Membership: " + group
+            Utils.shell_command("/usr/bin/dscl . append /Groups/" + group + " GroupMembership afpReadUsername 2> /dev/null")
+            Utils.shell_command("/usr/bin/dscl . append /Groups/" + group + " GroupMembers " + readUserGeneratedUID + "")
+            Utils.shell_command("/usr/bin/dscl . append /Groups/" + group + " GroupMembership afpWriteUsername 2> /dev/null")
+            Utils.shell_command("/usr/bin/dscl . append /Groups/" + group + " GroupMembers " + writeUserGeneratedUID + "")
+            break
 
-    print "\tStarting AFP..."
-    Utils.shell_command("/Applications/Server.app/Contents/ServerRoot/usr/sbin/serveradmin start afp")
+    if os.path.exists("/Applications/Server.app/Contents/ServerRoot/usr/sbin/serveradmin"):
+        print "\tStarting AFP..."
+        Utils.shell_command("/Applications/Server.app/Contents/ServerRoot/usr/sbin/serveradmin start afp 2> /dev/null")
+    else:
+        print "\tServer Admin not installed.  Please start AFP manually."
 
 
 def linkExistingPackages():
@@ -193,7 +210,7 @@ def createPackageMonitor():
     plistlib.writePlist(pl, "/Library/LaunchDaemons/com.jamfsoftware.jds.packageMonitor.plist")
     
     print "\tLoading LaunchDaemon..."
-    Utils.shell_command("/bin/launchctl unload /Library/LaunchDaemons/com.jamfsoftware.jds.packageMonitor.plist")
+    Utils.shell_command("/bin/launchctl unload /Library/LaunchDaemons/com.jamfsoftware.jds.packageMonitor.plist 2> /dev/null")
     Utils.shell_command("/bin/launchctl load /Library/LaunchDaemons/com.jamfsoftware.jds.packageMonitor.plist")
 
 
@@ -219,7 +236,7 @@ def createDP():
             <read_write_password>''' + writeUserPasswd + '''</read_write_password>
         </distribution_point>'''
         #print "\tData Sent: " + xmlDataString
-        opener = urllib2.build_opener(urllib2.HTTPHandler)
+        opener = urllib2.build_opener(TLS1Handler())
         request = urllib2.Request(url,xmlDataString)
         request.add_header("Authorization", Utils.getAuthHeader(jss_username,jss_password))
         request.add_header('Content-Type', 'application/xml')
@@ -265,6 +282,28 @@ class Utils:
         # Compute base64 representation of the authentication token.
         token = base64.b64encode('%s:%s' % (u,p))
         return "Basic %s" % token
+        
+#Force TLS since the JSS now requires TLS+ due to the POODLE vulnerability
+class TLS1Connection(httplib.HTTPSConnection):
+    def __init__(self, host, **kwargs):
+        httplib.HTTPSConnection.__init__(self, host, **kwargs)
+ 
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port),
+                self.timeout, self.source_address)
+        if getattr(self, '_tunnel_host', None):
+            self.sock = sock
+            self._tunnel()
+ 
+        self.sock = ssl.wrap_socket(sock, self.key_file, self.cert_file,
+                ssl_version=ssl.PROTOCOL_TLSv1)
+ 
+class TLS1Handler(urllib2.HTTPSHandler):
+    def __init__(self):
+        urllib2.HTTPSHandler.__init__(self)
+ 
+    def https_open(self, req):
+        return self.do_open(TLS1Connection, req)
 
 
 main()
